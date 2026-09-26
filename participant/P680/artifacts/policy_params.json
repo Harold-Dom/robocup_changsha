@@ -1,0 +1,14 @@
+{
+  "_comment": "P680 规则策略增益参数。entry.py 在 build_policy 时读取本文件；调参只改这里，不改代码。各参数含义与取值依据见 LOG.md。",
+  "params": {
+    "reach_budget": 0.32,
+    "closing_credit": 0.5,
+    "lead_gain": 1.0,
+    "lead_cap": 1.0,
+    "speed_est": 0.25,
+    "cover_frac": 1.0,
+    "follow_kp": 2.5,
+    "safe_dist": 0.22,
+    "avoid_gain": 1.8
+  }
+}
