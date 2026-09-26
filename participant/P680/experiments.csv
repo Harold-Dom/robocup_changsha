@@ -1,2 +1,2 @@
-experiment_id,description
-E001,ppo smoke 20000 steps seed 7101
+﻿experiment_id,description,suite_id,seed_schedule_id,code_commit,model_sha256,provenance,status,basic_mean_j,cooperation_mean_j,basic_coverage,cooperation_coverage,performance_score,notes
+E001,模板自带 PPO 基线原样评测（未改策略代码）,public-suite-v1,public-schedule-v1,3de95011f9ff491d6d23368a4ee1be4c0f8a834d,aedfa4443847600df2fd5e59e0942bff0077849f6d27ea163baf8b4b18d5c728,local_preview,ok,0.000000,0.133333,0.000000,0.133333,66.67,8 回合全 ok；basic 组零覆盖；总分仅由 coop-1 贡献；Windows 无阶段超时
