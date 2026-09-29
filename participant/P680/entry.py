@@ -1,4 +1,4 @@
-"""P680 规则策略：可达性过滤的目标认领 + 提前量拦截 + 覆盖后速度跟随 + 同伴避碰。
+"""P680 规则策略：可达性过滤的最小代价匹配分配 + 提前量拦截 + 覆盖后速度跟随 + 同伴避碰。
 
 只用 NumPy 推理，不引入 torch 或 requirements-infer.lock 之外的任何依赖。
 接口保持 build_policy / reset / act / close 不变，act 返回 (2,) float32 且分量落在 [-1, 1]。
@@ -66,15 +66,85 @@ def _inf_saturate(vec):
     return np.array([ax / m, ay / m], dtype=np.float64)
 
 
+# 不可行边的代价。远大于任何真实净距离（场地全域宽 2.0），
+# 用于在方阵上求"最大匹配优先、其次最小代价"。
+_BIG_COST = 1e6
+
+# 同分时按 agent_index 升序打破平局的代价偏置。
+# 必须高于观测 float32 量化噪声（约 2e-7），才能盖过舍入造成的伪差异；
+# 同时远小于可达目标的净距离量级，不会改变正常的距离排序。
+_INDEX_EPS = 1e-6
+
+
+def _min_cost_assignment(cost):
+    """方阵最小代价完美匹配，O(n^3) 匈牙利算法（最短增广路 + 势能）。
+
+    cost 为 (n, n) 数组，不可行边填 _BIG_COST；返回 ans，ans[i] 为行 i 分到的列。
+    requirements-infer.lock 只有 NumPy，不能用 scipy.optimize.linear_sum_assignment，
+    故自行实现。规模上限为协议的 agent_capacity = target_capacity = 8，
+    纯 Python 循环的耗时远低于 act_ms 限额。
+    """
+    n = int(cost.shape[0])
+    if n == 0:
+        return np.zeros(0, dtype=np.int64)
+    INF = float("inf")
+    u = np.zeros(n + 1, dtype=np.float64)   # 行势能
+    v = np.zeros(n + 1, dtype=np.float64)   # 列势能
+    p = np.zeros(n + 1, dtype=np.int64)     # p[j] = 匹配到列 j 的行号（1-indexed，0 表示空闲）
+    way = np.zeros(n + 1, dtype=np.int64)   # 增广路前驱
+    for i in range(1, n + 1):
+        p[0] = i
+        j0 = 0
+        minv = np.full(n + 1, INF, dtype=np.float64)
+        used = np.zeros(n + 1, dtype=bool)
+        while True:
+            used[j0] = True
+            i0 = int(p[j0])
+            delta = INF
+            j1 = -1
+            row = cost[i0 - 1]
+            for j in range(1, n + 1):
+                if not used[j]:
+                    cur = float(row[j - 1]) - u[i0] - v[j]
+                    if cur < minv[j]:
+                        minv[j] = cur
+                        way[j] = j0
+                    if minv[j] < delta:
+                        delta = minv[j]
+                        j1 = j
+            for j in range(n + 1):
+                if used[j]:
+                    u[int(p[j])] += delta
+                    v[j] -= delta
+                else:
+                    minv[j] -= delta
+            j0 = j1
+            if p[j0] == 0:
+                break
+        while j0:
+            j1 = int(way[j0])
+            p[j0] = p[j1]
+            j0 = j1
+    ans = np.full(n, -1, dtype=np.int64)
+    for j in range(1, n + 1):
+        if p[j] != 0:
+            ans[int(p[j]) - 1] = j - 1
+    return ans
+
+
 class RuleCoveragePolicy:
     """三段式规则策略。
 
-    分配：先按位移预算过滤掉物理上追不到的目标，再在剩下的可见目标上做
-      "最近机器人认领"，距离相同用 agent_index 小者优先。互相可见的同伴会算出
-      同一个赢家，因此不会争抢同一目标；追不到的目标直接放弃，避免白跑并在
-      目标点与同伴挤撞。
-    接近：朝拦截点满油门推进。观测不提供目标速度，用相邻两帧绝对位置差分估计，
-      再按到达时间做提前量。目标最大速度 0.2 低于机器人稳态 0.4，拦截优于追尾。
+    分配：每台机器人在"自己可见的机器人 × 自己可见的目标"上独立求解**同一个**
+      最小代价最大匹配（自实现匈牙利算法，见 `_min_cost_assignment`），再执行判给
+      自己的目标。代价为"净需走距离 = d - target_radius - 迎面折抵"，超出
+      `REACH_BUDGET` 或超出 `sense_radius` 的边视为不可行。取代了原先的
+      "最近者认领"——后者会让一台对所有目标都不是最近的机器人完全静止，
+      从而把可达目标白白漏掉（该缺陷逻辑上存在，实测公开 8 回合中 0 次造成损失，
+      本改动属对隐藏种子的稳健性改进，本地分数不变，详见 LOG.md）。
+    接近：朝拦截点满油门推进。观测不提供目标速度，用相邻两帧绝对位置差分估计
+      （实测对可见目标精度 5.8e-07，即 float32 舍入），再按到达时间做提前量。
+      目标最大速度 0.2 低于机器人稳态 0.4，拦截优于追尾。
     保持：进入覆盖圈后切换为速度跟随，把机器人速度收敛到目标速度，让逐步覆盖率
       尽可能多地累计得分步。
     避碰：同伴进入安全距离时叠加斥力。接触力是驱动力的 100 倍、碰撞惩罚权重 0.2，
@@ -117,6 +187,7 @@ class RuleCoveragePolicy:
         self.robot_mass = float(task.robot_mass)
         self.target_radius = float(task.target_radius)
         self.target_max_speed = float(task.target_max_speed)
+        self.sense_radius = float(task.sense_radius)
         # v_next = (1-damping)*v + (drive/mass)*act*dt  =>  act 的反解系数
         self._inv_act_scale = self.robot_mass / (self.drive_force * self.dt)
 
@@ -190,45 +261,72 @@ class RuleCoveragePolicy:
     # 决策
     # ------------------------------------------------------------------
     def _assign_target(self, tgt_pos, tgt_vis, peer_ids, peer_pos, my_pos, step):
-        """在可达的可见目标上做最近者认领，返回选中的目标索引或 None。"""
-        robot_ids = [self.agent_index] + list(peer_ids)
-        robot_pos = [my_pos] + list(peer_pos)
+        """分布式最小代价最大匹配，返回选中的目标索引或 None。
+
+        每台机器人在"自己可见的机器人 × 自己可见的目标"上独立求解**同一个**
+        分配问题，再执行判给自己的目标。取代原先的"最近者认领"——后者会让
+        一台对所有目标都不是最近的机器人完全静止，把可达目标白白漏掉。
+
+        一致性依据（可见性判定 `d <= sense_radius` 是对称的）：
+          * 代价只依赖机器人与目标的**绝对位置**，而绝对位置对所有观察者都是同一真值；
+          * 因此视角相同的机器人构造出**完全相同**的代价矩阵，匈牙利算法确定性，
+            必然算出同一分配，不会争抢同一目标；
+          * 我还能用绝对位置推断**同伴**对某目标的可见性与可达性（`d(peer, target)`），
+            即使那个同伴此刻不追它，也不会被我误认为空闲人手。
+
+        视角不完整时的冲突处理（`sense_radius=0.6`，两台都能看到同一目标的机器人
+        彼此可能不可见，因为 `2 × 0.6 > 0.6`）：
+          1. 代价加 `1e-6 × agent_index` 偏置。该量级高于观测 float32 量化噪声（约 2e-7），
+             故净距离在噪声内相等时稳定地判给 index 较小者，且偏置本身也是确定性的，
+             视角一致时结论仍完全一致；
+          2. 只认领匹配判给**自己**的目标，绝不追判给别人的目标；
+          3. 匹配把某台机器人分到填充列或不可行边时，该机器人保持静止——
+             不动不得分也不扣分，还避免在目标点与同伴挤撞。
+        残余风险：若目标 j 对机器人 r 可见、对我不可见，我无法把 j 纳入矩阵，
+        可能误判 r 空闲。这类目标我本来就追不到（`d(self, j) > sense_radius`），
+        损失上限是"少一台可用人手"，不会造成两台机器人追同一目标。
+        """
         remaining = max((self.horizon - step) * self.dt, 0.0)
 
-        chosen = None
-        chosen_gap = float("inf")
-        for j in range(self.num_targets):
-            if not tgt_vis[j]:
-                continue
-            rel = tgt_pos[j] - my_pos
-            d = float(np.hypot(rel[0], rel[1]))
+        # 行：自己 + 可见同伴，按 agent_index 升序（所有机器人同一规则，保证视角一致时结果一致）
+        rob_idx = sorted([self.agent_index] + list(peer_ids))
+        rob_pos = {self.agent_index: my_pos}
+        for k, p in zip(peer_ids, peer_pos):
+            rob_pos[k] = p
+        # 列：自己可见的目标，按 target index 升序
+        tgt_idx = [j for j in range(self.num_targets) if tgt_vis[j]]
+        if not tgt_idx:
+            return None
 
-            # 可达性过滤：目标迎面靠近能折抵一部分需要走的距离，
-            # 但目标会随机转向，只按 CLOSING_CREDIT 打折计入。
-            gap = d - self.target_radius
-            credit = 0.0
-            if d > 1e-9:
-                ux, uy = rel[0] / d, rel[1] / d
-                tv = self._tgt_vel[j]
-                closing = -float(tv[0] * ux + tv[1] * uy)
-                if closing > 0.0:
-                    credit = self.CLOSING_CREDIT * closing * remaining
-            if gap - credit > self.REACH_BUDGET:
-                continue
+        nr, nc = len(rob_idx), len(tgt_idx)
+        k = max(nr, nc)
+        cost = np.full((k, k), _BIG_COST, dtype=np.float64)
+        for a, r in enumerate(rob_idx):
+            rp = rob_pos[r]
+            for b, j in enumerate(tgt_idx):
+                d_rj = float(np.hypot(tgt_pos[j][0] - rp[0], tgt_pos[j][1] - rp[1]))
+                if d_rj > self.sense_radius:
+                    continue          # 机器人 r 看不见目标 j，不会去追
+                gap = d_rj - self.target_radius
+                # 目标迎面靠近能折抵一部分需要走的距离；实测目标会以 5/6 概率
+                # 在回合内随机转向（详见 LOG.md），故只按 CLOSING_CREDIT 打折计入。
+                credit = 0.0
+                if d_rj > 1e-9:
+                    ux, uy = (tgt_pos[j][0] - rp[0]) / d_rj, (tgt_pos[j][1] - rp[1]) / d_rj
+                    tv = self._tgt_vel[j]
+                    closing = -float(tv[0] * ux + tv[1] * uy)
+                    if closing > 0.0:
+                        credit = self.CLOSING_CREDIT * closing * remaining
+                net = gap - credit
+                if net > self.REACH_BUDGET:
+                    continue          # 超出位移预算，追不到
+                cost[a, b] = net + _INDEX_EPS * r
 
-            # 最近者认领，距离相同用 agent_index 小者优先，保证结论确定且一致
-            winner = self.agent_index
-            winner_d = d
-            for k in range(1, len(robot_ids)):
-                dk = float(np.hypot(tgt_pos[j, 0] - robot_pos[k][0],
-                                    tgt_pos[j, 1] - robot_pos[k][1]))
-                if dk < winner_d - 1e-9 or (abs(dk - winner_d) <= 1e-9 and robot_ids[k] < winner):
-                    winner = robot_ids[k]
-                    winner_d = dk
-            if winner == self.agent_index and gap < chosen_gap:
-                chosen_gap = gap
-                chosen = j
-        return chosen
+        assign = _min_cost_assignment(cost)
+        col = int(assign[rob_idx.index(self.agent_index)])
+        if col < 0 or col >= nc or cost[rob_idx.index(self.agent_index), col] >= _BIG_COST:
+            return None               # 分到填充列或不可行边：本步无可追目标
+        return tgt_idx[col]
 
     def _pursue(self, j, tgt_pos, my_pos, my_vel, step):
         """返回 (基础动作, 是否处于跟随模式)。"""
