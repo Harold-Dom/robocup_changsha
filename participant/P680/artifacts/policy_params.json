@@ -4,7 +4,7 @@
     "reach_budget": 0.32,
     "closing_credit": 1.0,
     "lead_gain": 1.0,
-    "lead_cap": 0.5,
+    "lead_cap": 1.5,
     "speed_est": 0.25,
     "cover_frac": 1.0,
     "follow_kp": 2.5,
