@@ -593,3 +593,15 @@ HEAD 补跑一次正式预检与公开测试，作为本轮结论的可溯源锚
   **`performance_score=225.00`**（basic 0.116667 / coop 0.333333、两组碰撞 0.0），
   与 E011/E015 逐位一致；`source_commit=99ad587`、`working_tree_dirty=false`、
   `code_tree_hash=bbeacb0a0fd1…cb67d`。策略代码与参数自 E015（`ffa0620`）冻结未再改动。
+
+## 2026-10-01 · E017 记录提交后 HEAD 复测锚点 + 报告锚定表述修正
+
+- 提交 `290550d` — `docs(P680): 补记E016冻结锚点并修正报告复现锚定`（含 E016 记录行
+  与报告复现阶段一次笔误修正前的状态）。
+- E017（`outputs/P680/e017/`）：在该 HEAD 干净工作区复跑预检与公开测试，预检退出码 0
+  （`rejections` 空、`scan_hits` 空）、评测退出码 0；
+  **`performance_score=225.00`**，与 E011/E015/E016 逐位一致；`source_commit=290550d`、
+  `working_tree_dirty=false`、`code_tree_hash=e3c7587355e706d160a1d53dbdf9e3a2c014d6d34887a7884495185aa1d976a3`、
+  95% CI 83.33~366.67、两组碰撞率 0.0、`act_ms_max` 0.226 ms。
+- 报告 §4 复现段的锚定表述改为"按提交链逐一记录（E011/E015/E016/E017 四锚点同分），
+  文档提交只改记录文件、不改策略行为"，避免复现指令绑定单个易漂移的文档 HEAD。

@@ -125,11 +125,14 @@ python scripts/evaluate_one.py --submission participant/P680 \
     --output outputs/P680/eval
 ```
 
-读 `outputs/P680/eval/result.json` 的 `status` 与 `performance_score`。预期
-（E016 冻结锚点 `source_commit=99ad587`、`code_tree_hash=bbeacb0a0fd13cdff636bad6f39213f1e23a662a4fdbc8b435552a6ae97cb67d`）：
+读 `outputs/P680/eval/result.json` 的 `status` 与 `performance_score`。预期成绩
 `performance_score=225.00`，basic 0.116667 / coop 0.333333，8 回合全 ok、零碰撞，
-`act_ms_max ≈ 0.19 ms`。各历史实验的成绩目录与提交哈希在 `experiments.csv` 的
-`code_commit` 列与 `LOG.md` 一一对应；用 `git show <hash>` 可检出当时策略与参数。
+`act_ms_max` 约 0.2 ms。该成绩可溯源锚点按提交链逐一记录于 `experiments.csv`
+（E011/E015：`code_tree_hash=7dcbab24175f…c66f`；E016：`99ad587` /
+`bbeacb0a0fd1…b67d`；E017：`290550d` / `e3c7587355e7…976a3`），四者逐位同分。
+策略代码与参数自 E015（`ffa0620`）冻结未再改动，文档提交只改变记录文件自身、
+不改变策略行为；各历史实验的成绩目录与提交哈希在 `experiments.csv` 的
+`code_commit` 列与 `LOG.md` 一一对应，用 `git show <hash>` 可检出当时策略与参数。
 参数文件 `artifacts/policy_params.json` 当前 sha256 与字节数以 `submission.yaml`
 的 `checkpoint_manifest` 为准（预检脚本会核对）。
 
