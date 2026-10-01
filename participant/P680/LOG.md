@@ -635,3 +635,70 @@ HEAD 补跑一次正式预检与公开测试，作为本轮结论的可溯源锚
   **无法确认 10-05 前 upstream 是否新增提交**；本地缓存 `upstream/master=5d1c2f5`，
   相对它 0 落后 / 26 领先，差异 9 个跟踪文件全部位于 `participant/P680/`。
   提交窗口开放、网络恢复后须重跑 `git fetch upstream` 复核（见 REPORT §4 复现前提）。
+
+## 2026-10-01 · E020 泛化体检：30 组额外随机种子对比 lead_gain 0.5 vs 1.0（探针，不改提交）
+
+- 动机：E011 的 `lead_gain=0.5`（+8.33）此前只在公开 8 回合上验证，增益又仅来自
+  coop-0 单一几何下"首次覆盖提前 1 步"的边界效应。按用户纪律"禁止为公开 8 回合硬调
+  过拟合"，在提交冻结后补做泛化体检，判断 0.5 相对 1.0 是真实稳健偏好还是公开套件侥幸。
+- 方法（`.work/probe/gen_probe.py` + `.work/probe/gen/`，全部在 gitignore 内，不改提交、
+  不走正式脚本）：
+  * **口径与官方一致**——地图由 `env.reset(seed=case.scenario_seed)` 生成（同 `run_episode`）；
+    每回合 `mean_j = Σ_t rewards[agent0] / horizon`；组 `mean_j` = 组内各 case scenario 均值；
+    `performance_score = Σ_g 1000·weight·(mean_j_g − random)/(learning − random)
+    = 500·(mean_j_basic + mean_j_coop)`（两组 weight 0.5、anchor 0→1，取自 `configs/scoring-v1.yaml`）。
+  * entry.py 只读加载，两份 `policy_params.json`（仅 lead_gain 0.5 / 1.0 不同，其余与冻结版
+    逐字段一致）写在临时目录，经 `BuildContext.artifact_dir` 注入，不触碰 `participant/P680/`。
+  * **对齐验证**：先在官方公开套件上复现——gain05 = **225.00**（basic 0.116667 / coop 0.333333）、
+    gain10 = **216.67**（basic 0.116667 / coop 0.316667），与 E015/E019、E008/E011 逐位吻合，
+    证明探针口径无偏、参数注入确实生效（未回退默认值）。
+  * **泛化**：`np.random.default_rng(20261001)` 生成 30 个额外 scenario_seed（区间 [1e6, 2e9)，
+    去重后升序，明细见 `.work/probe/gen/generalization_result.json`）；每个 seed 用 basic/coop
+    两组的**同一 task_config 模板**（签名一致：3 agent / 3 target / horizon 10 /
+    turn_interval_steps (5,10) / target_speed_fraction (0.5,1.0) / piecewise_heading_reflect）
+    各跑一次，两档 lead_gain 对照，合成 performance_score 分布。
+- 结论（**负面结果，决定性**）：
+  * gain05 与 gain10 的 performance_score 分布**完全相同**：mean 156.67、std 115.44、
+    median 133.33、p10 15.00、最差 10% 均值 0.00、min 0.00、max 416.67（两档逐位相等）。
+  * 逐 seed 差值 (0.5 − 1.0)：mean +0.000，**0.5 更优 0 / 更差 0 / 持平 30 / 30**；
+    最差 10%（最低 3 seed）与最好 10%（最高 3 seed）差值均值均 +0.000。
+  * 分组：basic mean_j 0.1822 vs 0.1822、coop mean_j 0.1311 vs 0.1311（Δ 均 0.0000）；
+    两档平均碰撞率均 0.0000。
+  * 判读：`lead_gain=0.5` 的 +8.33 **完全来自公开套件 coop-0 的边界几何**，在随机地图上
+    对 1.0 零泛化优势（30/30 持平）。这正是用户纪律禁止的"为公开 8 回合硬调过拟合"，
+    予以**回退**（见 E021）。泛化分布 std 高达 115、min 触及 0，也再次印证公开 4 场景
+    统计功效极弱、单一场景 ±8 的差值不具泛化意义。
+
+## 2026-10-01 · E021 回退 lead_gain→1.0 并正式复测（泛化体检结论落地）
+
+- 依据 E020，用 `.work/probe/abl_point.py lead_gain 1.0` 程序化回退参数并同步 submission.yaml
+  摘要（`a28bd953e8f9b0d6188440f3840b75b3b3171917d90c70d8417799822318ed6b`、407 字节，
+  即拦截升级 E008 后、消融前的原始参数摘要）；提交 `3706bc1`（revert）。
+- E021（`outputs/P680/e021/`，HEAD `3706bc1` 干净工作区，正式 check_submission + evaluate_one
+  均退出码 0）：**`performance_score=216.67`**，basic 0.116667 / coop 0.316667、两组碰撞 0.0、
+  `act_ms_max` 0.188 ms；`source_commit=3706bc1`、`working_tree_dirty=false`、
+  `code_tree_hash=af92aa28a0830ae721df183075609068dcb21654b7433bb54835f438e88693bb`、
+  95% CI 66.67~366.67。与 E008（拦截升级后、消融前）逐位一致，确认回退干净、
+  E008 的相遇时间迭代求解结构改动仍保留。
+- **报分口径更正**：E019 曾记"最终 HEAD 以 225.00 为报分依据"，该表述随本轮回退作废。
+  冻结版正式成绩现为 **216.67**（HEAD `3706bc1`，参数 lead_gain=1.0）；225.00 仅是
+  lead_gain=0.5 在公开套件上的过拟合读数，已剔除。较官方 rule 基线 175.00 仍 **+41.67**。
+- 此后文档提交（本条及 REPORT 同步）产生新 HEAD 但不改策略行为，按已闭合的锚点链约定
+  不再逐次复测；`code_tree_hash=af92aa28…93bb`（E021/`3706bc1`）为当前冻结版报分锚点。
+
+## 2026-10-01 · 官方主线新增提交 44241a2 记录与窗口开放后计划
+
+- 用户以 GitHub 公开 API 核实：官方主线（upstream/master）在本地缓存 `5d1c2f5` 之后新增
+  提交 **`44241a2`**，为**纯 README 文档提交，不含任何代码变更**。
+- 本地独立性声明（不编造）：本会话两次访问 GitHub（fetch / ls-remote）均 "Connection was
+  reset"，**我方未能独立 fetch 验证 `44241a2` 的存在与内容**，上述"纯文档、无代码变更"
+  系用户提供的外部核实结论，据实记录、标注来源为用户。
+- 窗口开放（2026-10-05）后的执行计划（届时须用户确认才实际 push / 开 PR）：
+  1. 先 `git fetch upstream` 复核主线实际 HEAD，确认 `44241a2` 及有无更晚提交；
+     若与用户核实不一致，以 fetch 结果为准并回报。
+  2. `git merge upstream/master`（预期仅并入 README 文档改动，无冲突、不触碰
+     `participant/P680/` 策略与参数）。
+  3. merge 后在干净工作区重跑 check_submission + evaluate_one，**确认冻结版成绩仍为
+     `216.67`**（注意：不是 225.00——lead_gain 已按 E020/E021 回退到 1.0）；若因主线
+     变更导致漂移，如实记录并复核后再定是否 push。
+  4. 复核通过后 `git push -u origin P680`，再开标题 `[P680] Final Submission` 的 PR。
