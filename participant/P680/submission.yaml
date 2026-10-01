@@ -14,4 +14,4 @@ train_command: null
 training_config_paths: []
 report_path: "REPORT.md"
 metadata:
-  description: "P680 规则策略：可达性过滤的目标认领 + 提前量拦截 + 覆盖后速度跟随 + 同伴避碰，纯 NumPy 推理，无模型产物"
+  description: "P680 规则策略：位移预算过滤的分布式最小代价匹配认领 + 位移曲线相遇时间迭代求解拦截提前量 + 覆盖后速度跟随 + 同伴避碰，纯 NumPy 推理，无模型产物"
