@@ -126,7 +126,7 @@ python scripts/evaluate_one.py --submission participant/P680 \
 ```
 
 读 `outputs/P680/eval/result.json` 的 `status` 与 `performance_score`。预期
-（HEAD 树内容 = E015/E011 的 `code_tree_hash=7dcbab24175f1322ba25de4b35ed3f8e992996df2ce2039ec066bb972c60c66f`）：
+（E016 冻结锚点 `source_commit=99ad587`、`code_tree_hash=bbeacb0a0fd13cdff636bad6f39213f1e23a662a4fdbc8b435552a6ae97cb67d`）：
 `performance_score=225.00`，basic 0.116667 / coop 0.333333，8 回合全 ok、零碰撞，
 `act_ms_max ≈ 0.19 ms`。各历史实验的成绩目录与提交哈希在 `experiments.csv` 的
 `code_commit` 列与 `LOG.md` 一一对应；用 `git show <hash>` 可检出当时策略与参数。

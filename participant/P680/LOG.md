@@ -573,3 +573,23 @@ HEAD 补跑一次正式预检与公开测试，作为本轮结论的可溯源锚
 - E015：`performance_score = 225.00`，`source_commit=ffa0620b0f5b3334e0d6bef9f9adadeb0883bc67`，
   `working_tree_dirty=false`，`code_tree_hash=7dcbab24175f…`（详见 `outputs/P680/e015/`）。
 - 相对 E007 锚点 216.67：**+8.33**。策略冻结，进入报告重写阶段。
+
+## 2026-10-01 · E016 报告重写与冻结版可溯源锚点
+
+- 提交 `99ad587` — `docs(P680): 按真实实验重写研究报告并更新清单描述`
+- `REPORT.md` 按真实实验全部重写：四段原理（可达性认领/拦截提前量/覆盖后跟随/避碰）、
+  E001–E015 对照结论（含 45° 吸附掉 41.67 的负面结果、reach_budget 六档无差别证伪、
+  lead_gain=0.5 弱偏好的机制依据与风险声明）、复现步骤、已知局限（公开套件仅 4 场景、
+  E015 的 95% CI 83.33~366.67、隐藏种子下会漂移、local_preview 口径）。
+  **模板虚构内容已全部清除**：P902/P903 对照、`tools/export_learning_baseline.py`、
+  `max|Δa|=8.628e-08`、训练曲线与 PPO 方案描述均不在新版报告中（仅"局限"一节如实
+  说明训练路线经决定放弃、本提交无学习组件）。
+- `submission.yaml`：metadata 描述改为与最终策略一致（含分布式匹配与相遇时间迭代）；
+  `checkpoint_manifest` 的 sha256（eaaca813…5225）与 size_bytes（407）经脚本重算核对，
+  与 `artifacts/policy_params.json` 实际内容一致，且与 E015/E016 评测结果中的
+  `artifact_hashes` 逐位相同。
+- E016 评测（`outputs/P680/e016/`，干净工作区，git PATH 注入）：预检退出码 0、
+  评测退出码 0；`status=ok`、errors 空、8 回合全 accepted；
+  **`performance_score=225.00`**（basic 0.116667 / coop 0.333333、两组碰撞 0.0），
+  与 E011/E015 逐位一致；`source_commit=99ad587`、`working_tree_dirty=false`、
+  `code_tree_hash=bbeacb0a0fd1…cb67d`。策略代码与参数自 E015（`ffa0620`）冻结未再改动。
