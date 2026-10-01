@@ -143,7 +143,13 @@ class RuleCoveragePolicy:
       从而把可达目标白白漏掉（该缺陷逻辑上存在，实测公开 8 回合中 0 次造成损失，
       本改动属对隐藏种子的稳健性改进，本地分数不变，详见 LOG.md）。
     接近：朝拦截点满油门推进。观测不提供目标速度，用相邻两帧绝对位置差分估计
-      （实测对可见目标精度 5.8e-07，即 float32 舍入），再按到达时间做提前量。
+      （实测对可见目标精度 5.8e-07，即 float32 舍入），再按相遇时间做提前量。
+      提前量不再用固定单步速度估算，而是扫描剩余步数预算内最小的可行相遇步数：
+      机器人沿自身位移曲线（每步增量 0 / 0.010 / 0.0175 / 0.0231 …，10 步总额
+      0.249 轴向、按饱和增益最高 0.352 对角）推进，目标按当前速度匀速直线外推，
+      迭代修正"方向→饱和增益→相遇点"直至稳定。实测目标以 5/6 概率在回合内
+      随机转向且转向时刻不可观测，故外推只用于估算相遇时间，不追求预判转向。
+      预算内无可行相遇时回退到固定 speed_est 估算（E007 行为）。
       目标最大速度 0.2 低于机器人稳态 0.4，拦截优于追尾。
     保持：进入覆盖圈后切换为速度跟随，把机器人速度收敛到目标速度，让逐步覆盖率
       尽可能多地累计得分步。
@@ -156,6 +162,10 @@ class RuleCoveragePolicy:
     # artifacts/policy_params.json 覆盖，在 __init__ 中绑定为实例属性。
     # 调参只改配置文件，不改代码；消融记录见 LOG.md。
 
+    # 相遇点定点迭代的次数上限。位移曲线增益只依赖瞄准方向，迭代 3~4 次后
+    # 方向变化进入观测噪声量级；超出上限则沿用最后一次可行解。
+    _LEAD_ITERS = 4
+
     def __init__(self, context):
         """context 是 BuildContext（spec / artifact_dir / device / limits / rng）。
 
@@ -165,7 +175,7 @@ class RuleCoveragePolicy:
         p = _load_params(context.artifact_dir)
         self.LEAD_GAIN = p["lead_gain"]          # 拦截提前量系数
         self.LEAD_CAP = p["lead_cap"]            # 提前时间上限（秒），等于整个回合长度
-        self.SPEED_EST = p["speed_est"]          # 估计的自身平均速度，用于推算到达时间
+        self.SPEED_EST = p["speed_est"]          # 回退用的自身平均速度估算
         self.COVER_FRAC = p["cover_frac"]        # 覆盖圈判定余量（相对 target_radius）
         self.FOLLOW_KP = p["follow_kp"]          # 跟随模式的位置修正增益（1/秒）
         self.REACH_BUDGET = p["reach_budget"]    # 可达性预算：超出即认定追不到，不参与认领
@@ -328,6 +338,66 @@ class RuleCoveragePolicy:
             return None               # 分到填充列或不可行边：本步无可追目标
         return tgt_idx[col]
 
+    def _displacement_curve(self, gain, v0, steps):
+        """满油门沿固定方向推进的标量位移曲线 S[n]（n=1..steps）。
+
+        与 MPE2 积分器逐位对齐：`pos += v_old*dt` 用**旧**速度，故第 1 步位移为
+        当前速度 v0 贡献（v0=0 时第 1 步完全不位移）；速度递推
+        `v_next = (1-damping)*v + (drive/mass)*act*dt`。`gain` 是无穷范数饱和
+        带来的等效幅值增益（轴向 1.0、对角最多 √2，实测位移 0.249→0.352）。
+        从静止起算的增量序列 0 / 0.010 / 0.0175 / 0.0231 … 与 LOG.md 实测一致。
+        """
+        accel = (self.drive_force / self.robot_mass) * self.dt * gain
+        decay = 1.0 - self.damping
+        s = np.zeros(steps + 1, dtype=np.float64)
+        w = v0
+        for n in range(1, steps + 1):
+            s[n] = s[n - 1] + w * self.dt
+            w = decay * w + accel
+        return s
+
+    def _encounter_steps(self, rel, tv, my_vel, remaining_steps):
+        """在剩余步数预算内扫描最小可行相遇步数 n（含覆盖半径余量）。
+
+        机器人沿 _displacement_curve 推进，目标按**当前速度匀速直线外推**
+        `rel + tv*n*dt`，逐 n 检查位移能否盖住"外推后间距 - target_radius"。
+        迭代修正"瞄准方向 → 饱和增益 → 相遇步数 → 新瞄准方向"至稳定
+        （最多 _LEAD_ITERS 次，纯 NumPy 定点迭代）。实测目标以 5/6 概率在
+        回合内随机转向，外推只用于估算相遇时间，不追求预判转向时刻。
+        返回相遇步数 n；预算内无可行相遇时返回 None。
+        """
+        v0 = float(np.hypot(my_vel[0], my_vel[1]))
+        aim = rel.copy()
+        result = None
+        for _ in range(self._LEAD_ITERS):
+            eu = float(np.hypot(aim[0], aim[1]))
+            if eu < 1e-12:
+                return None
+            u = aim / eu
+            am = max(abs(u[0]), abs(u[1]))   # 单位方向无穷范数 ∈ [1/√2, 1]
+            s = self._displacement_curve(1.0 / am, v0, remaining_steps)
+            found = None
+            for n in range(1, remaining_steps + 1):
+                tgt = rel + tv * (n * self.dt)
+                need = float(np.hypot(tgt[0], tgt[1])) - self.target_radius
+                if s[n] >= need:
+                    found = n
+                    break
+            result = found
+            if found is None:
+                return None
+            new_aim = rel + tv * (found * self.dt)
+            nm = float(np.hypot(new_aim[0], new_aim[1]))
+            if nm < 1e-12:
+                return found
+            # 方向变化小于观测噪声量级（实测 float32 舍入约 5.8e-07）即认为收敛
+            old_dir = aim / max(abs(aim[0]), abs(aim[1]))
+            new_dir = new_aim / max(abs(new_aim[0]), abs(new_aim[1]))
+            if float(np.max(np.abs(new_dir - old_dir))) < 1e-6:
+                return found
+            aim = new_aim
+        return result
+
     def _pursue(self, j, tgt_pos, my_pos, my_vel, step):
         """返回 (基础动作, 是否处于跟随模式)。"""
         tp = tgt_pos[j]
@@ -342,10 +412,18 @@ class RuleCoveragePolicy:
             act = (desired_vel - (1.0 - self.damping) * my_vel) * self._inv_act_scale
             return act, True
 
-        # 圈外：朝拦截点推进，提前时间取"到达时间"与剩余时间的较小值
-        gap = max(d - self.target_radius, 0.0)
-        t_arrive = gap / self.SPEED_EST if self.SPEED_EST > 0.0 else 0.0
+        # 圈外：求相遇时间。优先用位移曲线 + 匀速外推的迭代解；
+        # 预算内无可行相遇（或对角迭代未收敛）时，回退到固定 speed_est 估算。
         remaining = max((self.horizon - step) * self.dt, 0.0)
+        remaining_steps = self.horizon - step
+        n_meet = None
+        if remaining_steps >= 1:
+            n_meet = self._encounter_steps(rel, tv, my_vel, remaining_steps)
+        if n_meet is not None:
+            t_arrive = n_meet * self.dt
+        else:
+            gap = max(d - self.target_radius, 0.0)
+            t_arrive = gap / self.SPEED_EST if self.SPEED_EST > 0.0 else 0.0
         lead = min(self.LEAD_GAIN * t_arrive, self.LEAD_CAP, remaining)
         aim = tp + tv * lead
         direction = aim - my_pos
