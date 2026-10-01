@@ -617,3 +617,21 @@ HEAD 补跑一次正式预检与公开测试，作为本轮结论的可溯源锚
 - 至此 E015→E018 连续 HEAD 的文档提交全部同分，"记录提交不改变策略行为"已由
   实测充分证明；锚点链闭合。此后若再有文档改动，直接以本链最末锚点为参照，不再
   逐次复测（每次提交都产生新树哈希，复测会无穷递归；E007 先例同此口径）。
+
+## 2026-10-01 · E019 提交前自查复跑（README 清单第 7 项）与动作合法性冒烟
+
+- E019（`outputs/P680/e019/`，HEAD `00febe6` 干净工作区）：README"提交前自查"要求
+  "提交预检和公开测试均已重新运行"，据此在冻结版上正式复跑——预检退出码 0
+  （审核通过、rejections/scan_hits 空）、评测退出码 0；
+  **`performance_score=225.00`**，basic 0.116667 / coop 0.333333、两组碰撞 0.0、
+  `act_ms_max` 0.207 ms；`source_commit=00febe6`、`working_tree_dirty=false`、
+  `code_tree_hash=98018e76acd108e3145768fed8daed7007ccdb51183acb3985f78f43af6e6050`、
+  95% CI 83.33~366.67。与 E011/E015/E016/E017/E018 逐位一致。
+- 动作合法性冒烟（`.work/probe/smoke_final.py`，不进提交）：公开 8 回合 240 个决策点
+  检查 `act` 返回 `dtype=float32`、形状 `(2,)`、全有限、分量 ∈ [-1,1]，**0 违规**；
+  24 次 `reset` 后跨步状态（`_prev_tgt_vis`/`_tgt_vel`）全部清空，**0 违规**；
+  策略实例跨回合复用 + `close` 全部正常。SMOKE_OK。
+- 官方主线同步检查：本会话两次访问 GitHub（fetch/ls-remote）均"Connection was reset"，
+  **无法确认 10-05 前 upstream 是否新增提交**；本地缓存 `upstream/master=5d1c2f5`，
+  相对它 0 落后 / 26 领先，差异 9 个跟踪文件全部位于 `participant/P680/`。
+  提交窗口开放、网络恢复后须重跑 `git fetch upstream` 复核（见 REPORT §4 复现前提）。
