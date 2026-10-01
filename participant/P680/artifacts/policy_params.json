@@ -3,7 +3,7 @@
   "params": {
     "reach_budget": 0.32,
     "closing_credit": 1.0,
-    "lead_gain": 0.5,
+    "lead_gain": 1.0,
     "lead_cap": 1.0,
     "speed_est": 0.25,
     "cover_frac": 1.0,
