@@ -6,7 +6,7 @@ entrypoint: "entry:build_policy"
 artifact_dir: "artifacts"
 checkpoint_manifest:
   - path: "artifacts/policy_params.json"
-    sha256: "eaaca813ad286fc52a0967e29faf6e291407f97eeaddc7512c967500ca225225"
+    sha256: "827a105ff935c936c372cc31a894cbc61c01ba4937b232fc522181bfc4d29068"
     size_bytes: 407
 inference_lock: "requirements-infer.lock"
 method_type: "rule"
